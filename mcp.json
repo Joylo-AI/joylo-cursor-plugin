@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "joylo": {
+      "type": "http",
+      "url": "https://api.joylo.ai/mcp"
+    }
+  }
+}

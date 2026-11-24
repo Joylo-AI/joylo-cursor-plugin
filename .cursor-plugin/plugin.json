@@ -1,0 +1,14 @@
+{
+  "name": "joylo",
+  "displayName": "Joylo",
+  "version": "0.1.0",
+  "description": "Build, change, and publish Joylo apps from Cursor / Grok Bot: describe an app, follow the build, read its code, and put it live after you agree to the cost.",
+  "author": {
+    "name": "Joylo"
+  },
+  "homepage": "https://joylo.ai",
+  "repository": "https://github.com/Joylo-AI/joylo-cursor-plugin",
+  "license": "MIT",
+  "keywords": ["joylo", "mcp", "app-builder", "ai-app-builder", "web-app", "mobile-app", "publish"],
+  "logo": "assets/logo.svg"
+}
