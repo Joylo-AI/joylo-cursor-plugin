@@ -12,7 +12,7 @@ description: Create a new Joylo app from the user's description and follow the b
 
 ## Before you start
 
-1. Building uses the user's credits. Say so, and check `get_credit_balance` if they want to know what is left (it spends nothing).
+1. Building spends credits as soon as `create_project` is called. Tell the user that, and wait for a clear yes before the call. Check `get_credit_balance` if they want to know what is left (it spends nothing).
 2. Decide `app_type`. It is `web` or `mobile` and cannot be changed later. Use `mobile` only when they ask for a phone app (iOS, Android, Expo). A website that should work on phones is `web`. If it is unclear, ask.
 3. Do not write your own spec, design or mock-up first. Joylo plans the app and asks its own questions.
 

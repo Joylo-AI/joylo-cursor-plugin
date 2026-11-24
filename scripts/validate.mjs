@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Structure check for the Joylo Cursor plugin.
-// Adapted from lovablelabs/lovable-cursor-plugin scripts/validate-template.mjs for a
-// single plugin at the repo root (like replit/replit-cursor-plugin).
+// Adapted from lovablelabs/lovable-cursor-plugin scripts/validate-template.mjs and
+// cursor/plugin-template for a single plugin at the repo root (like replit/replit-cursor-plugin).
 // Usage: node scripts/validate.mjs   (run from the repo root)
 
 import { promises as fs } from "node:fs";
@@ -17,17 +17,38 @@ const addWarning = (m) => warnings.push(m);
 const pluginNamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
 const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
-// Production values. Anything else is flagged as a URL to change before submitting.
-const PROD_MCP_URL = "https://api.joylo.org/mcp";
-const KNOWN_PLACEHOLDERS = [
-  "api-test.joylo.org",
-  "auth-test.joylo.org",
-  "dev.joylo.org",
-  "test.joylo.org",
-  "localhost",
-];
+const PROD_MCP_URL = "https://api.joylo.ai/mcp";
+const PROD_HOME = "https://joylo.ai";
+const PROD_AUTH = "https://auth.joylo.ai";
+// Staging registrable domain. Split so this file does not contain the host as one string.
+const STAGING_DOMAIN = "joylo" + ".org";
 
-// Tools exposed by the Joylo MCP server (from its live tool list).
+// Fields documented for .cursor-plugin/plugin.json, plus displayName.
+// displayName is not in the reference table, but cursor/plugin-template and the
+// listed Replit and Lovable plugins all set it, and the marketplace uses it as the title.
+// publisher and category are not plugin manifest fields (category exists only on
+// multi-plugin marketplace entries).
+const MANIFEST_KEYS = new Set([
+  "name", "displayName", "version", "description", "author", "homepage", "repository",
+  "license", "keywords", "logo", "rules", "agents", "skills", "commands", "hooks",
+  "mcpServers", "variables",
+]);
+
+// Public Joylo URLs checked against real page content (joylo.ai returns 200 for unknown paths).
+const VERIFIED_JOYLO_URLS = new Set([
+  "https://joylo.ai",
+  "https://joylo.ai/",
+  "https://joylo.ai/privacy",
+  "https://joylo.ai/terms-of-service",
+  "https://joylo.ai/help",
+  "https://joylo.ai/help/articles/how-credits-work",
+  "https://joylo.ai/contact",
+  "https://joylo.ai/secure",
+  "https://api.joylo.ai/mcp",
+  "https://auth.joylo.ai",
+]);
+
+// Tools exposed by the production Joylo MCP server.
 const JOYLO_TOOLS = new Set([
   "whoami", "get_credit_balance", "list_projects", "get_project", "create_project",
   "get_build_status", "wait_for_build", "answer_questions", "stop_build", "send_followup",
@@ -35,6 +56,11 @@ const JOYLO_TOOLS = new Set([
   "wake_project", "get_publish_quote", "publish_app", "get_app_url",
   "update_published_app", "stop_published_app",
 ]);
+
+const YES_BEFORE_CALL = /wait for (?:a |the user's )?(?:clear )?yes/i;
+// Consent has to sit next to the tool it guards. A yes for one spending tool must
+// not satisfy the check for a different tool mentioned elsewhere in the same file.
+const CONSENT_RADIUS = 200;
 
 async function pathExists(p) {
   try { await fs.access(p); return true; } catch { return false; }
@@ -67,10 +93,14 @@ async function walk(dir) {
   const stack = [dir];
   while (stack.length) {
     const cur = stack.pop();
-    for (const e of await fs.readdir(cur, { withFileTypes: true })) {
+    let entries;
+    try { entries = await fs.readdir(cur, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
       const p = path.join(cur, e.name);
-      if (e.isDirectory()) stack.push(p);
-      else if (e.isFile()) out.push(p);
+      if (e.isDirectory()) {
+        if (e.name === ".git" || e.name === "node_modules") continue;
+        stack.push(p);
+      } else if (e.isFile()) out.push(p);
     }
   }
   return out;
@@ -100,19 +130,110 @@ function checkToolMentions(rel, body) {
   }
 }
 
+function consentWindows(body, tool) {
+  const needle = "`" + tool + "`";
+  const windows = [];
+  let from = 0;
+  while (from < body.length) {
+    const at = body.indexOf(needle, from);
+    if (at === -1) break;
+    windows.push(body.slice(Math.max(0, at - CONSENT_RADIUS), Math.min(body.length, at + needle.length + CONSENT_RADIUS)));
+    from = at + needle.length;
+  }
+  return windows;
+}
+
+// Returns the spending tools whose own nearby text does not carry a consent guard.
+function unguardedSpendingTools(body) {
+  const spend = [
+    ["create_project", null],
+    ["send_followup", null],
+    ["ask_question", /no `confirm_credits`/i],
+    ["publish_app", /confirm_credits/],
+  ];
+  const missing = [];
+  for (const [tool, extra] of spend) {
+    const windows = consentWindows(body, tool);
+    if (!windows.length) continue;
+    const guarded = windows.some((w) => YES_BEFORE_CALL.test(w) && /credit/i.test(w) && (!extra || extra.test(w)));
+    if (!guarded) missing.push(tool);
+  }
+  return missing;
+}
+
+function checkSafetyLanguage(rel, body) {
+  for (const tool of unguardedSpendingTools(body)) {
+    const extra = tool === "ask_question"
+      ? " Name that it has no confirm_credits gate."
+      : tool === "publish_app"
+        ? " Name confirm_credits."
+        : "";
+    addError(`${rel}: \`${tool}\` needs its own consent within ${CONSENT_RADIUS} characters: say it spends credits and wait for a yes.${extra}`);
+  }
+  if (body.includes("`answer_questions`") && !/only (?:with )?(?:their|the user's) answers|never pick an option/i.test(body)) {
+    addError(`${rel}: mentions answer_questions but does not say to send only the user's answers.`);
+  }
+}
+
+function assertConsentCheck() {
+  const ask = "Use `ask_question` only after you say it spends credits immediately and has no `confirm_credits` step, and wait for a yes.";
+  const send = "Call `send_followup` only after you say it spends credits and wait for a yes.";
+  const distant = ask + " ".repeat(CONSENT_RADIUS * 3) + "Then call `send_followup` to make the edit.";
+  const missing = unguardedSpendingTools(distant);
+  if (!missing.includes("send_followup") || missing.includes("ask_question")) {
+    addError("validator self-check failed: a yes next to ask_question was treated as consent for send_followup.");
+  }
+  if (unguardedSpendingTools(ask + " " + send).length) {
+    addError("validator self-check failed: consent written next to each tool was rejected.");
+  }
+}
+
+function joyloUrlsIn(text) {
+  const found = [];
+  const re = /https:\/\/(?:(?:api|auth)\.)?joylo\.ai[^\s)"'<>`]*/gi;
+  for (const m of text.matchAll(re)) {
+    found.push(m[0].replace(/[.,;:]+$/g, ""));
+  }
+  return found;
+}
+
 async function main() {
+  assertConsentCheck();
+
   // 1. Manifest
   const manifest = await readJson(path.join(repoRoot, ".cursor-plugin", "plugin.json"), "Plugin manifest");
   if (manifest) {
+    for (const key of Object.keys(manifest)) {
+      if (!MANIFEST_KEYS.has(key)) {
+        addError(`plugin.json "${key}" is not a Cursor plugin manifest field. The current schema has no "publisher" or "category".`);
+      }
+    }
     if (typeof manifest.name !== "string" || !pluginNamePattern.test(manifest.name)) {
       addError('plugin.json "name" must be lowercase kebab-case (alphanumerics, hyphens, periods).');
     }
-    if (!manifest.description) addError('plugin.json "description" is required for submission.');
-    if (manifest.version && !semverPattern.test(manifest.version)) addError('plugin.json "version" must be semver.');
-    if (!manifest.author || !manifest.author.name) addError('plugin.json "author.name" is required.');
-    for (const f of ["homepage", "repository", "license", "keywords", "logo"]) {
-      if (manifest[f] === undefined) addWarning(`plugin.json has no "${f}".`);
+    if (manifest.displayName !== undefined && (typeof manifest.displayName !== "string" || !manifest.displayName.trim())) {
+      addError('plugin.json "displayName" must be a non-empty string when set.');
     }
+    if (!manifest.description || String(manifest.description).trim().length < 40) {
+      addError('plugin.json "description" is required and should say what the plugin does.');
+    }
+    if (!manifest.version || !semverPattern.test(manifest.version)) addError('plugin.json "version" must be semver.');
+    if (!manifest.author || typeof manifest.author !== "object" || !manifest.author.name) {
+      addError('plugin.json "author.name" is required.');
+    } else if (!manifest.author.email) {
+      addWarning('plugin.json author.email is unset. Lovable sets one; add a real Joylo address if you want it on the listing.');
+    } else if (typeof manifest.author.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(manifest.author.email)) {
+      addError('plugin.json "author.email" is not a valid email address.');
+    }
+    if (manifest.homepage !== PROD_HOME) addError(`plugin.json "homepage" must be ${PROD_HOME}.`);
+    if (manifest.repository !== "https://github.com/Joylo-AI/joylo-cursor-plugin") {
+      addWarning(`plugin.json "repository" is ${manifest.repository}; make sure it is the public repo.`);
+    }
+    if (manifest.license !== "MIT") addError('plugin.json "license" must be MIT, matching LICENSE.');
+    if (!Array.isArray(manifest.keywords) || manifest.keywords.length === 0 || manifest.keywords.some((k) => typeof k !== "string" || !k.trim())) {
+      addError('plugin.json "keywords" must be a non-empty array of strings.');
+    }
+    if (!manifest.logo) addError('plugin.json "logo" is required so the marketplace listing has an icon.');
     for (const field of ["logo", "rules", "skills", "agents", "commands", "hooks", "mcpServers"]) {
       const vals = [manifest[field]].flat().filter((v) => typeof v === "string");
       for (const v of vals) {
@@ -121,16 +242,16 @@ async function main() {
         else if (!(await pathExists(path.resolve(repoRoot, v)))) addError(`plugin.json "${field}" references missing path "${v}".`);
       }
     }
-    if (manifest.repository && manifest.repository !== "https://github.com/Joylo-AI/joylo-cursor-plugin") {
-      addWarning(`plugin.json "repository" is ${manifest.repository}; make sure it is the public repo.`);
-    }
   }
 
   // 2. Logo
   const logoPath = path.join(repoRoot, manifest?.logo ?? "assets/logo.svg");
-  if (await pathExists(logoPath)) {
+  if (!(await pathExists(logoPath))) {
+    addError(`Logo file is missing: ${path.relative(repoRoot, logoPath)}`);
+  } else {
     const svg = await fs.readFile(logoPath, "utf8");
-    if (/PLACEHOLDER/i.test(svg)) addWarning(`${path.relative(repoRoot, logoPath)} is a placeholder; replace it with the official logo before submitting.`);
+    if (!svg.includes("<svg")) addError(`${path.relative(repoRoot, logoPath)} is not an SVG.`);
+    if (/PLACEHOLDER/i.test(svg)) addError(`${path.relative(repoRoot, logoPath)} is still a placeholder logo.`);
   }
 
   // 3. MCP config
@@ -144,13 +265,12 @@ async function main() {
         if (!pluginNamePattern.test(name)) addError(`mcp.json server "${name}" should be lowercase kebab-case.`);
         if (!cfg.url && !cfg.command) addError(`mcp.json server "${name}" needs "url" or "command".`);
         if (cfg.url) {
-          if (!cfg.url.startsWith("https://")) addError(`mcp.json server "${name}" url must be https.`);
-          if (cfg.type && !["http", "streamable-http", "sse"].includes(cfg.type)) addError(`mcp.json server "${name}" has unexpected type "${cfg.type}".`);
-          if (KNOWN_PLACEHOLDERS.some((h) => cfg.url.includes(h))) addWarning(`mcp.json server "${name}" points at a non-production host (${cfg.url}).`);
-          else if (cfg.url !== PROD_MCP_URL) addWarning(`mcp.json server "${name}" url (${cfg.url}) differs from the expected production URL ${PROD_MCP_URL}.`);
+          if (cfg.url !== PROD_MCP_URL) addError(`mcp.json server "${name}" url must be ${PROD_MCP_URL}.`);
+          if (cfg.type !== "http") addError(`mcp.json server "${name}" type must be "http" (Streamable HTTP).`);
         }
         if (cfg.headers) addError(`mcp.json server "${name}" has "headers"; sign-in is OAuth, so no keys or headers belong in the plugin.`);
         if (cfg.env) addError(`mcp.json server "${name}" has "env"; no secrets belong in the plugin.`);
+        if (cfg.auth) addError(`mcp.json server "${name}" has "auth"; Joylo uses OAuth discovery, not a baked-in client id.`);
         const raw = JSON.stringify(cfg);
         for (const m of raw.matchAll(/\$\{([A-Z0-9_]+)\}/g)) {
           if (!manifest?.variables || !JSON.stringify(manifest.variables).includes(m[1])) {
@@ -182,6 +302,7 @@ async function main() {
       if (kind === "skill") {
         const folder = path.basename(path.dirname(file));
         if (parsed.fields.name && parsed.fields.name !== folder) addWarning(`${rel}: skill name "${parsed.fields.name}" differs from its folder "${folder}".`);
+        if (parsed.fields.name && !pluginNamePattern.test(parsed.fields.name)) addError(`${rel}: skill name must be lowercase kebab-case.`);
       }
       if (parsed.fields.name) {
         const key = `${kind}:${parsed.fields.name}`;
@@ -189,24 +310,48 @@ async function main() {
         seen.set(key, rel);
       }
       checkToolMentions(rel, parsed.body);
+      checkSafetyLanguage(rel, parsed.body);
     }
   }
 
   // 5. Required docs
-  for (const f of ["README.md", "LICENSE"]) {
+  for (const f of ["README.md", "LICENSE", "SECURITY.md", "CHANGELOG.md"]) {
     if (!(await pathExists(path.join(repoRoot, f)))) addError(`${f} is missing.`);
+  }
+  if (await pathExists(path.join(repoRoot, "LICENSE"))) {
+    const license = await fs.readFile(path.join(repoRoot, "LICENSE"), "utf8");
+    if (!/MIT License/.test(license)) addError("LICENSE does not look like the MIT license named in plugin.json.");
   }
   if (await pathExists(path.join(repoRoot, "README.md"))) {
     const readme = await fs.readFile(path.join(repoRoot, "README.md"), "utf8");
-    if (!/Before submitting/.test(readme)) addWarning('README.md has no "Before submitting" section.');
-    else addWarning('README.md still has a "Before submitting" checklist; finish it and trim it before submitting.');
+    if (/Before submitting/.test(readme)) addError('README.md still has a "Before submitting" checklist. Put maintainer-only leftovers in the PR, not the listing README.');
+    if (/PLACEHOLDER/i.test(readme)) addError("README.md still mentions a placeholder.");
+    if (!/^## Sign-in/m.test(readme)) addError('README.md needs a "Sign-in" section.');
+    if (!/credit/i.test(readme)) addError("README.md must explain credit spending.");
+    if (!YES_BEFORE_CALL.test(readme)) addError("README.md must say the agent waits for a yes before spending credits.");
+    if (!/no `confirm_credits`/i.test(readme)) addError("README.md must say ask_question has no confirm_credits gate.");
+    if (!/Build me a Joylo app/.test(readme)) addError("README.md needs an example prompt.");
+    for (const url of [PROD_HOME + "/privacy", PROD_HOME + "/terms-of-service", PROD_HOME + "/help", PROD_HOME + "/secure", PROD_HOME + "/contact", PROD_MCP_URL, PROD_AUTH]) {
+      if (!readme.includes(url)) addError(`README.md is missing ${url}.`);
+    }
+    for (const tool of JOYLO_TOOLS) {
+      if (!readme.includes("`" + tool + "`")) addError(`README.md does not document \`${tool}\`.`);
+    }
   }
 
-  // 6. Stray files that should never be committed
+  // 6. Whole-repo checks: staging hosts, unverified Joylo links, secrets
   for (const f of await walk(repoRoot)) {
     const rel = path.relative(repoRoot, f);
-    if (rel.startsWith(".git" + path.sep)) continue;
+    if (rel.toLowerCase().includes(STAGING_DOMAIN)) addError(`${rel}: path contains the staging domain.`);
     if (/(^|\/)\.env(\.|$)|\.pem$|\.key$/.test(rel)) addError(`Secret-looking file should not be in the plugin: ${rel}`);
+    let text;
+    try { text = await fs.readFile(f, "utf8"); } catch { continue; }
+    if (text.toLowerCase().includes(STAGING_DOMAIN)) addError(`${rel}: mentions the staging domain (${STAGING_DOMAIN}). Production is joylo.ai.`);
+    if (/https?:\/\/(?:localhost|127\.0\.0\.1)\b/i.test(text)) addError(`${rel}: contains a localhost URL.`);
+    if (/http:\/\/(?:(?:api|auth)\.)?joylo\.ai/i.test(text)) addError(`${rel}: uses http:// for a Joylo host. Use https.`);
+    for (const url of joyloUrlsIn(text)) {
+      if (!VERIFIED_JOYLO_URLS.has(url)) addError(`${rel}: Joylo URL is not on the verified list: ${url}`);
+    }
   }
 
   if (warnings.length) { console.log("Warnings:"); for (const w of warnings) console.log(`- ${w}`); console.log(""); }

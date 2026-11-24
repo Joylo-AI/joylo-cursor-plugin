@@ -21,11 +21,11 @@ description: Change, fix, or ask about an existing Joylo app, then verify the re
 
 ## Ask without changing
 
-Use `ask_question` for questions like "how does sign-in work?" or "what would payments take?". It uses credits and never changes code. Write the question in full, pass an `idempotency_key` UUID and reuse it on retry. It waits about 50 seconds; if the answer is not back, call `get_latest_reply`.
+Use `ask_question` when they want an answer and no code change, for example how sign-in works. It spends credits immediately and has no `confirm_credits` step, so tell the user that and wait for a yes before calling it. Write the question in full, pass an `idempotency_key` UUID and reuse it on retry. It waits about 50 seconds; if the answer is not back, call `get_latest_reply`.
 
 ## Make a change
 
-1. Changes use credits; say so before the first one.
+1. Changes spend credits as soon as `send_followup` is called. Say so, and wait for a yes before the call.
 2. Make sure nothing is building (`get_build_status`). `send_followup` and `ask_question` only work when the project is idle.
 3. Call `send_followup` with the change written out in full in the user's words, without extras. Pass an `idempotency_key` UUID and reuse it on retry.
 4. Follow the build with `wait_for_build` exactly as in `build-joylo-app`, including passing any `needs_input` questions to the user and sending only their answers through `answer_questions`.
