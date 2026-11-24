@@ -21,7 +21,7 @@ description: Change, fix, or ask about an existing Joylo app, then verify the re
 
 ## Ask without changing
 
-Use `ask_question` for questions like "how does sign-in work?" or "what would payments take?". It never changes code. It spends credits immediately and has no `confirm_credits` step, so tell the user it will spend credits and wait for a yes before calling it. Write the question in full, pass an `idempotency_key` UUID and reuse it on retry. It waits about 50 seconds; if the answer is not back, call `get_latest_reply`.
+Use `ask_question` when they want an answer and no code change, for example how sign-in works. It spends credits immediately and has no `confirm_credits` step, so tell the user that and wait for a yes before calling it. Write the question in full, pass an `idempotency_key` UUID and reuse it on retry. It waits about 50 seconds; if the answer is not back, call `get_latest_reply`.
 
 ## Make a change
 

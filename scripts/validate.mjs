@@ -58,6 +58,9 @@ const JOYLO_TOOLS = new Set([
 ]);
 
 const YES_BEFORE_CALL = /wait for (?:a |the user's )?(?:clear )?yes/i;
+// Consent has to sit next to the tool it guards. A yes for one spending tool must
+// not satisfy the check for a different tool mentioned elsewhere in the same file.
+const CONSENT_RADIUS = 200;
 
 async function pathExists(p) {
   try { await fs.access(p); return true; } catch { return false; }
@@ -127,21 +130,61 @@ function checkToolMentions(rel, body) {
   }
 }
 
+function consentWindows(body, tool) {
+  const needle = "`" + tool + "`";
+  const windows = [];
+  let from = 0;
+  while (from < body.length) {
+    const at = body.indexOf(needle, from);
+    if (at === -1) break;
+    windows.push(body.slice(Math.max(0, at - CONSENT_RADIUS), Math.min(body.length, at + needle.length + CONSENT_RADIUS)));
+    from = at + needle.length;
+  }
+  return windows;
+}
+
+// Returns the spending tools whose own nearby text does not carry a consent guard.
+function unguardedSpendingTools(body) {
+  const spend = [
+    ["create_project", null],
+    ["send_followup", null],
+    ["ask_question", /no `confirm_credits`/i],
+    ["publish_app", /confirm_credits/],
+  ];
+  const missing = [];
+  for (const [tool, extra] of spend) {
+    const windows = consentWindows(body, tool);
+    if (!windows.length) continue;
+    const guarded = windows.some((w) => YES_BEFORE_CALL.test(w) && /credit/i.test(w) && (!extra || extra.test(w)));
+    if (!guarded) missing.push(tool);
+  }
+  return missing;
+}
+
 function checkSafetyLanguage(rel, body) {
-  const mentions = (tool) => body.includes("`" + tool + "`");
-  if (mentions("create_project") || mentions("send_followup") || mentions("ask_question")) {
-    if (!/credit/i.test(body)) addError(`${rel}: mentions a credit-spending tool but never says it spends credits.`);
-    if (!YES_BEFORE_CALL.test(body)) addError(`${rel}: mentions a credit-spending tool but does not require a yes before the call.`);
+  for (const tool of unguardedSpendingTools(body)) {
+    const extra = tool === "ask_question"
+      ? " Name that it has no confirm_credits gate."
+      : tool === "publish_app"
+        ? " Name confirm_credits."
+        : "";
+    addError(`${rel}: \`${tool}\` needs its own consent within ${CONSENT_RADIUS} characters: say it spends credits and wait for a yes.${extra}`);
   }
-  if (mentions("ask_question") && !/no `confirm_credits`/i.test(body)) {
-    addError(`${rel}: mentions ask_question but does not say it has no confirm_credits gate. It spends credits immediately.`);
-  }
-  if (mentions("publish_app")) {
-    if (!body.includes("confirm_credits")) addError(`${rel}: mentions publish_app but not confirm_credits.`);
-    if (!YES_BEFORE_CALL.test(body)) addError(`${rel}: mentions publish_app but does not require a yes before publishing.`);
-  }
-  if (mentions("answer_questions") && !/only (?:with )?(?:their|the user's) answers|never pick an option/i.test(body)) {
+  if (body.includes("`answer_questions`") && !/only (?:with )?(?:their|the user's) answers|never pick an option/i.test(body)) {
     addError(`${rel}: mentions answer_questions but does not say to send only the user's answers.`);
+  }
+}
+
+function assertConsentCheck() {
+  const ask = "Use `ask_question` only after you say it spends credits immediately and has no `confirm_credits` step, and wait for a yes.";
+  const send = "Call `send_followup` only after you say it spends credits and wait for a yes.";
+  const distant = ask + " ".repeat(CONSENT_RADIUS * 3) + "Then call `send_followup` to make the edit.";
+  const missing = unguardedSpendingTools(distant);
+  if (!missing.includes("send_followup") || missing.includes("ask_question")) {
+    addError("validator self-check failed: a yes next to ask_question was treated as consent for send_followup.");
+  }
+  if (unguardedSpendingTools(ask + " " + send).length) {
+    addError("validator self-check failed: consent written next to each tool was rejected.");
   }
 }
 
@@ -155,6 +198,8 @@ function joyloUrlsIn(text) {
 }
 
 async function main() {
+  assertConsentCheck();
+
   // 1. Manifest
   const manifest = await readJson(path.join(repoRoot, ".cursor-plugin", "plugin.json"), "Plugin manifest");
   if (manifest) {
