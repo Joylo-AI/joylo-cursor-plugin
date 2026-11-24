@@ -6,11 +6,9 @@
   "author": {
     "name": "Joylo"
   },
-  "publisher": "Joylo",
-  "homepage": "https://joylo.org",
+  "homepage": "https://joylo.ai",
   "repository": "https://github.com/Joylo-AI/joylo-cursor-plugin",
   "license": "MIT",
-  "category": "integrations",
   "keywords": ["joylo", "mcp", "app-builder", "ai-app-builder", "web-app", "mobile-app", "publish"],
   "logo": "assets/logo.svg"
 }
