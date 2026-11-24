@@ -1,0 +1,7 @@
+<!-- PLACEHOLDER LOGO: replace with the official Joylo logo before submitting. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Joylo (placeholder logo)">
+  <title>Joylo (placeholder logo)</title>
+  <rect width="256" height="256" rx="56" fill="#6C4CF1"/>
+  <path d="M150 64v92c0 26-18 42-44 42-14 0-26-5-34-14l16-18c5 5 11 8 18 8 10 0 16-6 16-18V64z" fill="#FFFFFF"/>
+  <circle cx="184" cy="72" r="14" fill="#FFD84D"/>
+</svg>

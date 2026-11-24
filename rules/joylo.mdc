@@ -1,0 +1,19 @@
+---
+description: Guardrails for driving Joylo projects from Cursor through the Joylo MCP tools
+alwaysApply: false
+---
+
+joylo-workflow:
+
+Joylo's own builder owns the app's code. It plans, asks its own questions, writes the app, and keeps a live preview. You are not editing those files locally; you send requests through the Joylo MCP tools and read back what was built.
+
+- Never spend credits without the user's agreement. `create_project`, `send_followup` and `ask_question` all use the user's credits. Before the first one in a conversation, say that it costs credits; `get_credit_balance` shows what is left and spends nothing.
+- Never publish without the user agreeing to the quoted cost. Call `get_publish_quote` first, show `credits_required` and `period_days`, and wait for a clear yes. Pass that exact `credits_required` figure as `confirm_credits` to `publish_app`. Never guess it or reuse an old quote.
+- Ask the user before `update_published_app` or `stop_published_app`, even though updating costs no extra credits.
+- Never invent answers to build questions. When `wait_for_build` or `get_build_status` returns `needs_input`, show the user Joylo's questions and options, and pass only their answers to `answer_questions`. For a `phase_plan`, put their reply in `notes` ("yes" approves).
+- Joylo cannot see this conversation. Write `intent`, `message` and `question` out in full, in the user's own words. Do not add features, pages, roles or technical choices they did not ask for, because that changes the plan and the cost.
+- Verify before claiming done. A build that reaches `completed` is not proof the change is in. Use `list_files` and `read_file` (free, work while asleep) to check the code, then share the `get_preview` link.
+- Reuse the `idempotency_key` on retries. Generate one UUID per request for `create_project`, `send_followup`, `ask_question`, `publish_app` and `update_published_app`, and send the same key again if you retry that request, so a retry never creates a second project, build or publish.
+- Keep the user posted during long builds. Each `wait_for_build` call waits up to 55 seconds; call it again while `state` is `building` and pass on `activity` in plain words. Joylo gives no time left, so do not promise one.
+- `send_followup` and `ask_question` only work when nothing is building. Use `stop_build` only when the user asks to stop.
+- There is no delete tool. Do not create throwaway projects.
